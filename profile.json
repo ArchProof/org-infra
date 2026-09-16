@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "archproof.gitops-profile/v1",
+  "organization": "archproof",
+  "appId": 4961360,
+  "organizationId": 328676511,
+  "installationId": 162097296,
+  "singleOwner": true,
+  "reviewers": [
+    {
+      "id": 5505886,
+      "login": "anktsrkr"
+    }
+  ],
+  "pemPathRef": "GOVERNANCE_PEM_PATH",
+  "state": {
+    "sandboxKey": "github/sandbox/state.tfstate",
+    "key": "github/org-infra/state.tfstate",
+    "secretKeyRef": "STATE_SECRET_KEY",
+    "kind": "minio",
+    "region": "us-east-1",
+    "accessKeyRef": "STATE_ACCESS_KEY",
+    "endpoint": "http://127.0.0.1:9000",
+    "bucket": "archproof-gitops-state"
+  }
+}

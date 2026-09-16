@@ -1,0 +1,9 @@
+{
+  "org-infra": { "visibility": "public", "template": false },
+  "platform": { "visibility": "private", "template": false },
+  "missions": { "visibility": "public", "template": false },
+  "workflows": { "visibility": "public", "template": false },
+  "actions": { "visibility": "public", "template": false },
+  "kill-the-secrets": { "visibility": "public", "template": true },
+  "learner-state": { "visibility": "private", "template": false }
+}

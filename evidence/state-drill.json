@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "archproof.state-drill/v1",
+  "checkedAt": "2026-09-16T16:54:31.125Z",
+  "kind": "minio",
+  "endpoint": "http://127.0.0.1:9000",
+  "bucket": "archproof-gitops-state",
+  "stateKey": "github/org-infra/state.tfstate",
+  "sandboxKey": "github/sandbox/state.tfstate",
+  "probePrefix": "github/probes/b6dd3a635bc7f09c9ceb91da7504cee1/",
+  "conditionalMutualExclusion": true,
+  "lockReacquired": true,
+  "versionBackupRestore": true,
+  "productionB2Verified": false,
+  "productionMinioVerified": true,
+  "tofuProcessLockVerified": true,
+  "independentSandboxStateVerified": true,
+  "sandboxApplyEmptyReplan": true,
+  "lockFailureResume": true,
+  "probeStateKeys": [
+    "github/probes/b6dd3a635bc7f09c9ceb91da7504cee1/a.tfstate",
+    "github/probes/b6dd3a635bc7f09c9ceb91da7504cee1/b.tfstate"
+  ],
+  "status": "storage_and_tofu_verified"
+}

@@ -1,0 +1,12 @@
+.terraform/
+node_modules/
+artifacts/
+*.tfstate*
+*.plan
+*.tfvars*
+*.pem
+*.key
+profile.local.json
+backend.local.json
+imports.local.tf.json
+crash.*

@@ -1,0 +1,84 @@
+name: Protected GitOps
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [plan, apply, drift]
+        required: true
+      reviewed_sha:
+        description: Exact current merged main SHA reviewed by the environment approver
+        required: true
+      plan_digest:
+        description: Required for apply; SHA-256 of the privately saved reviewed plan
+        required: false
+  schedule:
+    - cron: '23 6 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: archproof-github-state
+  cancel-in-progress: false
+jobs:
+  reconcile:
+    if: github.ref == 'refs/heads/main'
+    environment: gitops
+    runs-on: ubuntu-24.04
+    outputs:
+      drift_status: ${{ steps.result.outputs.status }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.16.0'
+      - name: Verify reviewed revision
+        env:
+          REVIEWED_SHA: ${{ inputs.reviewed_sha }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != schedule ]; then
+            test "$REVIEWED_SHA" = "$GITHUB_SHA"
+          fi
+      - run: bash tooling/install-ci.sh
+      - run: npm --prefix tooling ci --ignore-scripts --no-audit --no-fund
+      - name: Reconcile reviewed state
+        id: result
+        env:
+          MODE: ${{ inputs.mode || 'drift' }}
+          APPROVED_DIGEST: ${{ inputs.plan_digest }}
+          GOVERNANCE_PEM: ${{ secrets.GOVERNANCE_PEM }}
+          STATE_ACCESS_KEY: ${{ secrets.STATE_ACCESS_KEY }}
+          STATE_SECRET_KEY: ${{ secrets.STATE_SECRET_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          export GOVERNANCE_PEM_PATH="$RUNNER_TEMP/governance.pem"
+          printf '%s' "$GOVERNANCE_PEM" > "$GOVERNANCE_PEM_PATH"
+          unset GOVERNANCE_PEM
+          trap 'rm -f "$GOVERNANCE_PEM_PATH"' EXIT
+          args=("$MODE" --profile profile.json --commit "$GITHUB_SHA" --work "$RUNNER_TEMP/gitops-private" --drill evidence/state-drill.json --adoptions adoptions.json)
+          if [ "$MODE" = apply ]; then args+=(--approved-digest "$APPROVED_DIGEST"); fi
+          node tooling/cli.mjs "${args[@]}" > "$RUNNER_TEMP/gitops-summary.json"
+          node --input-type=module -e 'import fs from "node:fs";const r=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/gitops-summary.json"));fs.appendFileSync(process.env.GITHUB_OUTPUT,`status=${r.status}\n`);fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,`Source: ${r.sourceSha}\n\nPlan digest: ${r.planDigest}\n\nStatus: ${r.status}\n\nRestricted details: ${r.restrictedDetails??"see approved plan receipt"}\n`);'
+  drift-issue:
+    if: always() && (github.event_name == 'schedule' || inputs.mode == 'drift') && github.ref == 'refs/heads/main'
+    needs: reconcile
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.16.0'
+      - run: npm --prefix tooling ci --ignore-scripts --no-audit --no-fund
+      - env:
+          ARCHPROOF_NATIVE_TOKEN: ${{ github.token }}
+          DRIFT_STATUS: ${{ needs.reconcile.outputs.drift_status || 'error' }}
+        run: node tooling/cli.mjs drift-issue --status "$DRIFT_STATUS" --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

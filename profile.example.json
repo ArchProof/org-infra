@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "archproof.gitops-profile/v1",
+  "organization": "archproof",
+  "appId": 4961360,
+  "organizationId": 328676511,
+  "installationId": 162097296,
+  "singleOwner": null,
+  "reviewers": [],
+  "pemPathRef": "GOVERNANCE_PEM_PATH",
+  "state": {
+    "kind": "b2",
+    "endpoint": "REQUIRED_B2_HTTPS_ENDPOINT",
+    "region": "REQUIRED_B2_REGION",
+    "bucket": "REQUIRED_PRIVATE_BUCKET",
+    "key": "github/org-infra/state.tfstate",
+    "sandboxKey": "github/sandbox/state.tfstate",
+    "accessKeyRef": "STATE_ACCESS_KEY",
+    "secretKeyRef": "STATE_SECRET_KEY"
+  }
+}

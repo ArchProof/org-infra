@@ -1,0 +1,12 @@
+{
+  "name": "archproof-learning",
+  "url": "https://github.com/archproof",
+  "public": true,
+  "default_permissions": { "metadata": "read", "administration": "write", "contents": "read", "repository_hooks": "write", "pull_requests": "read", "actions": "read", "checks": "write" },
+  "default_events": ["installation", "installation_repositories", "check_run"],
+  "hook_attributes": { "url": "REQUIRED_HTTPS_APP_WEBHOOK", "active": true },
+  "callback_urls": ["REQUIRED_HTTPS_OAUTH_CALLBACK"],
+  "setup_url": "REQUIRED_HTTPS_INSTALLATION_CALLBACK",
+  "setup_on_update": true,
+  "request_oauth_on_install": false
+}
