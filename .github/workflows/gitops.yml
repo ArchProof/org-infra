@@ -1,39 +1,38 @@
 name: Protected GitOps
+
 on:
   workflow_dispatch:
     inputs:
-      mode:
+      action:
         type: choice
-        options: [plan, apply, drift]
+        description: OpenTofu Action
+        options: [plan, apply]
         required: true
       reviewed_sha:
         description: Exact current merged main SHA reviewed by the environment approver
         required: true
-      plan_digest:
-        description: Required for apply; SHA-256 of the privately saved reviewed plan
-        required: false
   schedule:
-    - cron: '23 6 * * *'
+    - cron: '23 6 * * *' # Daily drift check
+
 permissions:
   contents: read
+
 concurrency:
   group: archproof-github-state
   cancel-in-progress: false
+
 jobs:
   reconcile:
     if: github.ref == 'refs/heads/main'
     environment: gitops
     runs-on: ubuntu-24.04
-    outputs:
-      drift_status: ${{ steps.result.outputs.status }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: '24.16.0'
+
       - name: Verify reviewed revision
         env:
           REVIEWED_SHA: ${{ inputs.reviewed_sha }}
@@ -41,13 +40,15 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" != schedule ]; then
             test "$REVIEWED_SHA" = "$GITHUB_SHA"
           fi
-      - run: bash tooling/install-ci.sh
-      - run: npm --prefix tooling ci --ignore-scripts --no-audit --no-fund
-      - name: Reconcile reviewed state
-        id: result
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v2
+        with:
+          tofu-version: 1.12.0
+
+      - name: Reconcile GitOps State
         env:
-          MODE: ${{ inputs.mode || 'drift' }}
-          APPROVED_DIGEST: ${{ inputs.plan_digest }}
+          ACTION: ${{ inputs.action || 'plan' }}
           GOVERNANCE_PEM: ${{ secrets.GOVERNANCE_PEM }}
           STATE_ACCESS_KEY: ${{ secrets.STATE_ACCESS_KEY }}
           STATE_SECRET_KEY: ${{ secrets.STATE_SECRET_KEY }}
@@ -55,30 +56,28 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          export GOVERNANCE_PEM_PATH="$RUNNER_TEMP/governance.pem"
-          printf '%s' "$GOVERNANCE_PEM" > "$GOVERNANCE_PEM_PATH"
+          export GITHUB_APP_PEM_FILE="$RUNNER_TEMP/governance.pem"
+          printf '%s' "$GOVERNANCE_PEM" > "$GITHUB_APP_PEM_FILE"
           unset GOVERNANCE_PEM
-          trap 'rm -f "$GOVERNANCE_PEM_PATH"' EXIT
-          args=("$MODE" --profile profile.json --commit "$GITHUB_SHA" --work "$RUNNER_TEMP/gitops-private" --drill evidence/state-drill.json --adoptions adoptions.json)
-          if [ "$MODE" = apply ]; then args+=(--approved-digest "$APPROVED_DIGEST"); fi
-          node tooling/cli.mjs "${args[@]}" > "$RUNNER_TEMP/gitops-summary.json"
-          node --input-type=module -e 'import fs from "node:fs";const r=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/gitops-summary.json"));fs.appendFileSync(process.env.GITHUB_OUTPUT,`status=${r.status}\n`);fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,`Source: ${r.sourceSha}\n\nPlan digest: ${r.planDigest}\n\nStatus: ${r.status}\n\nRestricted details: ${r.restrictedDetails??"see approved plan receipt"}\n`);'
-  drift-issue:
-    if: always() && (github.event_name == 'schedule' || inputs.mode == 'drift') && github.ref == 'refs/heads/main'
-    needs: reconcile
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      issues: write
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: '24.16.0'
-      - run: npm --prefix tooling ci --ignore-scripts --no-audit --no-fund
-      - env:
-          ARCHPROOF_NATIVE_TOKEN: ${{ github.token }}
-          DRIFT_STATUS: ${{ needs.reconcile.outputs.drift_status || 'error' }}
-        run: node tooling/cli.mjs drift-issue --status "$DRIFT_STATUS" --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          trap 'rm -f "$GITHUB_APP_PEM_FILE"' EXIT
+
+          export GITHUB_APP_ID=$(jq -r .appId profile.json)
+          export GITHUB_APP_INSTALLATION_ID=$(jq -r .installationId profile.json)
+          BUCKET=$(jq -r .state.bucket profile.json)
+          KEY=$(jq -r .state.key profile.json)
+          REGION=$(jq -r .state.region profile.json)
+          ENDPOINT=$(jq -r .state.endpoint profile.json)
+
+          tofu init \
+            -backend-config="bucket=$BUCKET" \
+            -backend-config="key=$KEY" \
+            -backend-config="region=$REGION" \
+            -backend-config="endpoint=$ENDPOINT" \
+            -backend-config="access_key=$STATE_ACCESS_KEY" \
+            -backend-config="secret_key=$STATE_SECRET_KEY"
+
+          if [ "$ACTION" = "plan" ] || [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+            tofu plan -no-color -out="$RUNNER_TEMP/plan.tfplan"
+          elif [ "$ACTION" = "apply" ]; then
+            tofu apply -auto-approve -no-color
+          fi

@@ -1,8 +1,0 @@
-{
-  "name": "archproof-governance",
-  "url": "https://github.com/archproof",
-  "public": false,
-  "default_permissions": { "metadata": "read", "administration": "write", "contents": "write", "workflows": "write", "environments": "write", "members": "write" },
-  "default_events": [],
-  "hook_attributes": { "active": false }
-}
