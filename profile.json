@@ -13,13 +13,13 @@
   ],
   "pemPathRef": "GOVERNANCE_PEM_PATH",
   "state": {
-    "sandboxKey": "github/sandbox/state.tfstate",
+    "kind": "neon-s3",
+    "endpoint": "https://br-lingering-dust-b47g6top.storage.c-6.us-east-2.aws.neon.tech",
+    "region": "us-east-2",
+    "bucket": "uploads",
     "key": "github/org-infra/state.tfstate",
-    "secretKeyRef": "STATE_SECRET_KEY",
-    "kind": "minio",
-    "region": "us-east-1",
+    "sandboxKey": "github/sandbox/state.tfstate",
     "accessKeyRef": "STATE_ACCESS_KEY",
-    "endpoint": "http://127.0.0.1:9000",
-    "bucket": "archproof-gitops-state"
+    "secretKeyRef": "STATE_SECRET_KEY"
   }
 }
