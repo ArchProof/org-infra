@@ -179,6 +179,11 @@ jobs:
       - name: Extract Environment from Profile
         id: profile
         run: |
+          echo "GITHUB_APP_ID=$(jq -r .appId profile.json)" >> "$GITHUB_ENV"
+          echo "GITHUB_APP_INSTALLATION_ID=$(jq -r .installationId profile.json)" >> "$GITHUB_ENV"
+          echo "TF_VAR_reviewer_ids=$(jq -c '[.reviewers[].id]' profile.json)" >> "$GITHUB_ENV"
+          echo "TF_VAR_single_owner=$(jq -r .singleOwner profile.json)" >> "$GITHUB_ENV"
+
           # Generate OpenTofu S3 backend configuration matching archproof spec
           jq '{
             bucket: .state.bucket,
