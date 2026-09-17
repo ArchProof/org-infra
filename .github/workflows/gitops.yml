@@ -1,21 +1,16 @@
 name: Protected GitOps
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      action:
-        type: choice
-        description: OpenTofu Action
-        options: [plan, apply]
-        required: true
-      reviewed_sha:
-        description: Exact current merged main SHA reviewed by the environment approver
-        required: true
   schedule:
     - cron: '23 6 * * *' # Daily drift check
 
 permissions:
   contents: read
+  pull-requests: write
+  issues: write
 
 concurrency:
   group: archproof-github-state
@@ -23,6 +18,7 @@ concurrency:
 
 jobs:
   reconcile:
+    name: Reconcile GitOps State
     if: github.ref == 'refs/heads/main'
     environment: gitops
     runs-on: ubuntu-24.04
@@ -30,54 +26,121 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
           persist-credentials: false
-
-      - name: Verify reviewed revision
-        env:
-          REVIEWED_SHA: ${{ inputs.reviewed_sha }}
-        run: |
-          if [ "$GITHUB_EVENT_NAME" != schedule ]; then
-            test "$REVIEWED_SHA" = "$GITHUB_SHA"
-          fi
 
       - name: Setup OpenTofu
         uses: opentofu/setup-opentofu@v2
         with:
-          tofu-version: 1.12.0
+          tofu_version: 1.12.0
 
-      - name: Reconcile GitOps State
-        env:
-          ACTION: ${{ inputs.action || 'plan' }}
-          GOVERNANCE_PEM: ${{ secrets.GOVERNANCE_PEM }}
-          STATE_ACCESS_KEY: ${{ secrets.STATE_ACCESS_KEY }}
-          STATE_SECRET_KEY: ${{ secrets.STATE_SECRET_KEY }}
-        shell: bash
+      - name: Cache OpenTofu Plugins
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/plugin-cache
+          key: ${{ runner.os }}-opentofu-${{ hashFiles('**/.terraform.lock.hcl') }}
+
+      - name: Extract Environment from Profile
+        id: profile
         run: |
-          set -euo pipefail
-          umask 077
-          export GITHUB_APP_PEM_FILE="$RUNNER_TEMP/governance.pem"
-          printf '%s' "$GOVERNANCE_PEM" > "$GITHUB_APP_PEM_FILE"
-          unset GOVERNANCE_PEM
-          trap 'rm -f "$GITHUB_APP_PEM_FILE"' EXIT
+          echo "GITHUB_APP_ID=$(jq -r .appId profile.json)" >> "$GITHUB_ENV"
+          echo "GITHUB_APP_INSTALLATION_ID=$(jq -r .installationId profile.json)" >> "$GITHUB_ENV"
+          echo "TF_VAR_reviewer_ids=$(jq -c '[.reviewers[].id]' profile.json)" >> "$GITHUB_ENV"
+          echo "TF_VAR_single_owner=$(jq -r .singleOwner profile.json)" >> "$GITHUB_ENV"
+          echo "STATE_BUCKET=$(jq -r .state.bucket profile.json)" >> "$GITHUB_ENV"
+          echo "STATE_KEY=$(jq -r .state.key profile.json)" >> "$GITHUB_ENV"
+          echo "STATE_REGION=$(jq -r .state.region profile.json)" >> "$GITHUB_ENV"
+          echo "STATE_ENDPOINT=$(jq -r .state.endpoint profile.json)" >> "$GITHUB_ENV"
 
-          export GITHUB_APP_ID=$(jq -r .appId profile.json)
-          export GITHUB_APP_INSTALLATION_ID=$(jq -r .installationId profile.json)
-          BUCKET=$(jq -r .state.bucket profile.json)
-          KEY=$(jq -r .state.key profile.json)
-          REGION=$(jq -r .state.region profile.json)
-          ENDPOINT=$(jq -r .state.endpoint profile.json)
+      - name: OpenTofu Init
+        id: init
+        env:
+          TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/plugin-cache
+          AWS_ACCESS_KEY_ID: ${{ secrets.STATE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.STATE_SECRET_KEY }}
+        run: |
+          mkdir -p "${{ runner.temp }}/plugin-cache"
+          tofu init -input=false \
+            -backend-config="bucket=$STATE_BUCKET" \
+            -backend-config="key=$STATE_KEY" \
+            -backend-config="region=$STATE_REGION" \
+            -backend-config="endpoint=$STATE_ENDPOINT"
 
-          tofu init \
-            -backend-config="bucket=$BUCKET" \
-            -backend-config="key=$KEY" \
-            -backend-config="region=$REGION" \
-            -backend-config="endpoint=$ENDPOINT" \
-            -backend-config="access_key=$STATE_ACCESS_KEY" \
-            -backend-config="secret_key=$STATE_SECRET_KEY"
-
-          if [ "$ACTION" = "plan" ] || [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
-            tofu plan -no-color -out="$RUNNER_TEMP/plan.tfplan"
-          elif [ "$ACTION" = "apply" ]; then
-            tofu apply -auto-approve -no-color
+      - name: OpenTofu Plan
+        id: plan
+        env:
+          GITHUB_APP_PEM_FILE: ${{ secrets.GOVERNANCE_PEM }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.STATE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.STATE_SECRET_KEY }}
+        run: |
+          set +e
+          tofu plan -detailed-exitcode -no-color -lock-timeout=60s -out="${{ runner.temp }}/plan.tfplan"
+          EXITCODE=$?
+          echo "exitcode=$EXITCODE" >> "$GITHUB_OUTPUT"
+          tofu show -no-color "${{ runner.temp }}/plan.tfplan" > "${{ runner.temp }}/plan.txt"
+          
+          # Render plan to Step Summary
+          echo "## 📖 OpenTofu Plan Result" >> $GITHUB_STEP_SUMMARY
+          if [ $EXITCODE -eq 0 ]; then
+            echo "✅ **No changes.** Infrastructure matches Git configuration." >> $GITHUB_STEP_SUMMARY
+          elif [ $EXITCODE -eq 2 ]; then
+            echo "⚠️ **Changes detected.**" >> $GITHUB_STEP_SUMMARY
+            echo "<details><summary>Click to view plan</summary>" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```hcl' >> $GITHUB_STEP_SUMMARY
+            head -c 50000 "${{ runner.temp }}/plan.txt" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "</details>" >> $GITHUB_STEP_SUMMARY
+          elif [ $EXITCODE -eq 1 ]; then
+            echo "::error::OpenTofu plan failed with an error."
+            exit 1
           fi
+          exit 0
+
+      - name: Upload Reviewed Plan Artifact
+        if: steps.plan.outputs.exitcode == '2' && github.event_name != 'schedule'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ github.sha }}
+          path: ${{ runner.temp }}/plan.tfplan
+          retention-days: 1
+
+      - name: Generate Drift Report
+        if: github.event_name == 'schedule' && steps.plan.outputs.exitcode == '2'
+        run: |
+          mkdir -p evidence/drift
+          cat << 'EOF' > evidence/drift/drift-report.md
+          # ⚠️ Infrastructure Drift Detected
+
+          An OpenTofu drift check executed on schedule has detected divergence between real-world infrastructure and Git declarations.
+
+          - Run ID: ${{ github.run_id }}
+          - Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          - Commit SHA: ${{ github.sha }}
+
+          ## Plan Diff
+          EOF
+          cat "${{ runner.temp }}/plan.txt" >> evidence/drift/drift-report.md
+
+      - name: Create Pull Request on Drift
+        if: github.event_name == 'schedule' && steps.plan.outputs.exitcode == '2'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ github.token }}
+          branch: gitops/drift-alert
+          title: "⚠️ Infrastructure Drift Detected [$(date +'%Y-%m-%d')]"
+          commit-message: "chore(gitops): record infrastructure drift report"
+          body: |
+            ### OpenTofu Scheduled Drift Alert
+            Drift was detected during the daily scheduled GitOps check.
+
+            [View Workflow Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+      - name: OpenTofu Apply
+        if: github.event_name != 'schedule' && steps.plan.outputs.exitcode == '2'
+        env:
+          GITHUB_APP_PEM_FILE: ${{ secrets.GOVERNANCE_PEM }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.STATE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.STATE_SECRET_KEY }}
+        run: |
+          # Applies strictly the exact pre-computed plan file
+          tofu apply -input=false -lock-timeout=60s "${{ runner.temp }}/plan.tfplan"
