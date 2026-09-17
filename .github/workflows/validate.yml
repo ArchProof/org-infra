@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   validate:
@@ -23,13 +24,37 @@ jobs:
         with:
           tofu-version: 1.12.0
 
+      - name: Cache OpenTofu Plugins
+        uses: actions/cache@v4
+        with:
+          path: ~/.terraform.d/plugin-cache
+          key: ${{ runner.os }}-opentofu-${{ hashFiles('**/.terraform.lock.hcl') }}
+
       - name: Check OpenTofu formatting
+        id: fmt
         run: tofu fmt -check -recursive
 
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.50.3
+
+      - name: Run TFLint
+        id: tflint
+        run: |
+          tflint --init
+          tflint
+
       - name: OpenTofu Init (No backend)
-        run: tofu init -backend=false -lockfile=readonly
+        id: init
+        env:
+          TF_PLUGIN_CACHE_DIR: ~/.terraform.d/plugin-cache
+        run: |
+          mkdir -p ~/.terraform.d/plugin-cache
+          tofu init -backend=false -lockfile=readonly
 
       - name: Validate schema with synthetic non-credentials
+        id: validate
         run: tofu validate
         env:
           GITHUB_APP_ID: '1'
@@ -37,8 +62,65 @@ jobs:
           GITHUB_APP_PEM_FILE: synthetic-validation-only
 
       - name: Verify Documentation (terraform-docs)
+        id: docs
         uses: terraform-docs/gh-actions@v1.4.1
         with:
           working-dir: .
           config-file: .terraform-docs.yml
           fail-on-diff: true
+
+      - name: Generate PR Validation Summary
+        if: always()
+        run: |
+          echo "## 🔍 OpenTofu GitOps Validation Report" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Formatting (\`tofu fmt\`)** | ${{ steps.fmt.outcome == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Linter (\`tflint\`)** | ${{ steps.tflint.outcome == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Schema (\`tofu validate\`)** | ${{ steps.validate.outcome == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Documentation (\`terraform-docs\`)** | ${{ steps.docs.outcome == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Post Validation Comment to PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fmtStatus = '${{ steps.fmt.outcome }}' === 'success' ? '✅ Passed' : '❌ Failed';
+            const tflintStatus = '${{ steps.tflint.outcome }}' === 'success' ? '✅ Passed' : '❌ Failed';
+            const validateStatus = '${{ steps.validate.outcome }}' === 'success' ? '✅ Passed' : '❌ Failed';
+            const docsStatus = '${{ steps.docs.outcome }}' === 'success' ? '✅ Passed' : '❌ Failed';
+            const allPassed = '${{ job.status }}' === 'success';
+
+            const body = `### 🔍 GitOps Validation: ${allPassed ? '✅ Passed' : '❌ Issues Found'}
+
+            | Check | Status |
+            |---|---|
+            | **Formatting (\`tofu fmt\`)** | ${fmtStatus} |
+            | **Linter (\`tflint\`)** | ${tflintStatus} |
+            | **Schema (\`tofu validate\`)** | ${validateStatus} |
+            | **Documentation (\`terraform-docs\`)** | ${docsStatus} |
+
+            *Commit: \`${{ github.sha }}\`*`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existingComment = comments.find(c => c.body.includes('GitOps Validation:') && c.user.type === 'Bot');
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body
+              });
+            }
