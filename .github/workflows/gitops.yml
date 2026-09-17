@@ -17,11 +17,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  reconcile:
-    name: Reconcile GitOps State
+  plan:
+    name: Speculative OpenTofu Plan
     if: github.ref == 'refs/heads/main'
-    environment: gitops
+    environment: gitops-plan
     runs-on: ubuntu-24.04
+    outputs:
+      has_changes: ${{ steps.plan.outputs.has_changes }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -88,16 +90,17 @@ jobs:
           set +e
           tofu plan -detailed-exitcode -no-color -lock-timeout=60s -out="${{ runner.temp }}/plan.tfplan"
           EXITCODE=$?
-          echo "exitcode=$EXITCODE" >> "$GITHUB_OUTPUT"
           tofu show -no-color "${{ runner.temp }}/plan.tfplan" > "${{ runner.temp }}/plan.txt"
           
           # Render plan to Step Summary
           echo "## 📖 OpenTofu Plan Result" >> $GITHUB_STEP_SUMMARY
           if [ $EXITCODE -eq 0 ]; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
             echo "✅ **No changes.** Infrastructure matches Git configuration." >> $GITHUB_STEP_SUMMARY
           elif [ $EXITCODE -eq 2 ]; then
-            echo "⚠️ **Changes detected.**" >> $GITHUB_STEP_SUMMARY
-            echo "<details><summary>Click to view plan</summary>" >> $GITHUB_STEP_SUMMARY
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "⚠️ **Changes detected.** Review the plan below before approving deployment." >> $GITHUB_STEP_SUMMARY
+            echo "<details open><summary>Click to view plan diff</summary>" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo '```hcl' >> $GITHUB_STEP_SUMMARY
             head -c 50000 "${{ runner.temp }}/plan.txt" >> $GITHUB_STEP_SUMMARY
@@ -110,15 +113,17 @@ jobs:
           exit 0
 
       - name: Upload Reviewed Plan Artifact
-        if: steps.plan.outputs.exitcode == '2' && github.event_name != 'schedule'
+        if: steps.plan.outputs.has_changes == 'true' && github.event_name != 'schedule'
         uses: actions/upload-artifact@v4
         with:
           name: tfplan-${{ github.sha }}
-          path: ${{ runner.temp }}/plan.tfplan
+          path: |
+            ${{ runner.temp }}/plan.tfplan
+            ${{ runner.temp }}/backend.json
           retention-days: 1
 
       - name: Generate Drift Report
-        if: github.event_name == 'schedule' && steps.plan.outputs.exitcode == '2'
+        if: github.event_name == 'schedule' && steps.plan.outputs.has_changes == 'true'
         run: |
           mkdir -p evidence/drift
           cat << 'EOF' > evidence/drift/drift-report.md
@@ -135,7 +140,7 @@ jobs:
           cat "${{ runner.temp }}/plan.txt" >> evidence/drift/drift-report.md
 
       - name: Create Pull Request on Drift
-        if: github.event_name == 'schedule' && steps.plan.outputs.exitcode == '2'
+        if: github.event_name == 'schedule' && steps.plan.outputs.has_changes == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ github.token }}
@@ -148,8 +153,49 @@ jobs:
 
             [View Workflow Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
+  apply:
+    name: Protected OpenTofu Apply
+    needs: plan
+    if: github.event_name != 'schedule' && needs.plan.outputs.has_changes == 'true'
+    environment: gitops
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version: 1.12.0
+
+      - name: Cache OpenTofu Plugins
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/plugin-cache
+          key: ${{ runner.os }}-opentofu-${{ hashFiles('**/.terraform.lock.hcl') }}
+
+      - name: Download Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ github.sha }}
+          path: ${{ runner.temp }}
+
+      - name: OpenTofu Init
+        id: init
+        env:
+          TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/plugin-cache
+          AWS_ACCESS_KEY_ID: ${{ secrets.STATE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.STATE_SECRET_KEY }}
+          AWS_EC2_METADATA_DISABLED: "true"
+        run: |
+          mkdir -p "${{ runner.temp }}/plugin-cache"
+          export AWS_ACCESS_KEY_ID="$(printf '%s' "$AWS_ACCESS_KEY_ID" | tr -d '\r\n[:space:]')"
+          export AWS_SECRET_ACCESS_KEY="$(printf '%s' "$AWS_SECRET_ACCESS_KEY" | tr -d '\r\n[:space:]')"
+          tofu init -input=false -backend-config="${{ runner.temp }}/backend.json"
+
       - name: OpenTofu Apply
-        if: github.event_name != 'schedule' && steps.plan.outputs.exitcode == '2'
         env:
           GITHUB_APP_PEM_FILE: ${{ secrets.GOVERNANCE_PEM }}
           AWS_ACCESS_KEY_ID: ${{ secrets.STATE_ACCESS_KEY }}
@@ -158,5 +204,8 @@ jobs:
         run: |
           export AWS_ACCESS_KEY_ID="$(printf '%s' "$AWS_ACCESS_KEY_ID" | tr -d '\r\n[:space:]')"
           export AWS_SECRET_ACCESS_KEY="$(printf '%s' "$AWS_SECRET_ACCESS_KEY" | tr -d '\r\n[:space:]')"
-          # Applies strictly the exact pre-computed plan file
+          # Applies strictly the exact pre-computed binary plan file reviewed by the human
           tofu apply -input=false -lock-timeout=60s "${{ runner.temp }}/plan.tfplan"
+
+          echo "## 🚀 OpenTofu Apply Succeeded" >> $GITHUB_STEP_SUMMARY
+          echo "The reviewed plan was successfully applied to production infrastructure." >> $GITHUB_STEP_SUMMARY
