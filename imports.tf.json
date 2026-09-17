@@ -1,0 +1,16 @@
+{
+  "import": [
+    {
+      "to": "github_repository.catalog[\"org-infra\"]",
+      "id": "org-infra"
+    },
+    {
+      "to": "github_repository_environment.gitops",
+      "id": "org-infra:gitops"
+    },
+    {
+      "to": "github_repository_ruleset.public[\"org-infra\"]",
+      "id": "org-infra:23558841"
+    }
+  ]
+}
