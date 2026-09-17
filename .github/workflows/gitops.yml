@@ -118,9 +118,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: tfplan-${{ github.sha }}
-          path: |
-            ${{ runner.temp }}/plan.tfplan
-            ${{ runner.temp }}/backend.json
+          path: ${{ runner.temp }}/plan.tfplan
           retention-days: 1
 
       - name: Generate Drift Report
@@ -177,6 +175,24 @@ jobs:
         with:
           path: ${{ runner.temp }}/plugin-cache
           key: ${{ runner.os }}-opentofu-${{ hashFiles('**/.terraform.lock.hcl') }}
+
+      - name: Extract Environment from Profile
+        id: profile
+        run: |
+          # Generate OpenTofu S3 backend configuration matching archproof spec
+          jq '{
+            bucket: .state.bucket,
+            key: .state.key,
+            region: .state.region,
+            endpoints: { s3: .state.endpoint },
+            use_path_style: true,
+            use_lockfile: true,
+            skip_credentials_validation: true,
+            skip_region_validation: true,
+            skip_metadata_api_check: true,
+            skip_requesting_account_id: true,
+            skip_s3_checksum: true
+          }' profile.json > "${{ runner.temp }}/backend.json"
 
       - name: Download Plan Artifact
         uses: actions/download-artifact@v4
