@@ -22,12 +22,12 @@ jobs:
       - name: Setup OpenTofu
         uses: opentofu/setup-opentofu@v2
         with:
-          tofu-version: 1.12.0
+          tofu_version: 1.12.0
 
       - name: Cache OpenTofu Plugins
         uses: actions/cache@v4
         with:
-          path: ~/.terraform.d/plugin-cache
+          path: ${{ runner.temp }}/plugin-cache
           key: ${{ runner.os }}-opentofu-${{ hashFiles('**/.terraform.lock.hcl') }}
 
       - name: Check OpenTofu formatting
@@ -48,9 +48,9 @@ jobs:
       - name: OpenTofu Init (No backend)
         id: init
         env:
-          TF_PLUGIN_CACHE_DIR: ~/.terraform.d/plugin-cache
+          TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/plugin-cache
         run: |
-          mkdir -p ~/.terraform.d/plugin-cache
+          mkdir -p "${{ runner.temp }}/plugin-cache"
           tofu init -backend=false -lockfile=readonly
 
       - name: Validate schema with synthetic non-credentials
