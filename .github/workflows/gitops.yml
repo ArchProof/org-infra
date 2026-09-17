@@ -65,6 +65,50 @@ jobs:
             skip_s3_checksum: true
           }' profile.json > "${{ runner.temp }}/backend.json"
 
+          # Ensure healthy state storage endpoint resolution (guards against transient AWS ELB node failures)
+          HOST_PIN=$(node -e '
+            const dns = require("dns");
+            const https = require("https");
+            const fs = require("fs");
+            const profile = JSON.parse(fs.readFileSync("profile.json", "utf8"));
+            if (profile.state && profile.state.endpoint) {
+              const u = new URL(profile.state.endpoint);
+              const host = u.hostname;
+              dns.lookup(host, { all: true, family: 4 }, (err, addresses) => {
+                if (err || !addresses || addresses.length <= 1) process.exit(0);
+                let checked = 0;
+                addresses.forEach(({ address: ip }) => {
+                  const req = https.request({
+                    host: ip,
+                    port: u.port || 443,
+                    path: "/",
+                    method: "GET",
+                    servername: host,
+                    headers: { Host: host },
+                    rejectUnauthorized: false,
+                    timeout: 2500
+                  }, res => {
+                    if (res.statusCode !== 500 && res.statusCode !== 0) {
+                      console.log(`${ip} ${host}`);
+                      process.exit(0);
+                    }
+                    checked++;
+                    if (checked === addresses.length) process.exit(0);
+                  });
+                  req.on("error", () => {
+                    checked++;
+                    if (checked === addresses.length) process.exit(0);
+                  });
+                  req.end();
+                });
+              });
+            }
+          ' 2>/dev/null || true)
+          if [ -n "$HOST_PIN" ]; then
+            echo "State endpoint health resolution: $HOST_PIN"
+            echo "$HOST_PIN" | sudo tee -a /etc/hosts
+          fi
+
       - name: OpenTofu Init
         id: init
         env:
@@ -198,6 +242,50 @@ jobs:
             skip_requesting_account_id: true,
             skip_s3_checksum: true
           }' profile.json > "${{ runner.temp }}/backend.json"
+
+          # Ensure healthy state storage endpoint resolution (guards against transient AWS ELB node failures)
+          HOST_PIN=$(node -e '
+            const dns = require("dns");
+            const https = require("https");
+            const fs = require("fs");
+            const profile = JSON.parse(fs.readFileSync("profile.json", "utf8"));
+            if (profile.state && profile.state.endpoint) {
+              const u = new URL(profile.state.endpoint);
+              const host = u.hostname;
+              dns.lookup(host, { all: true, family: 4 }, (err, addresses) => {
+                if (err || !addresses || addresses.length <= 1) process.exit(0);
+                let checked = 0;
+                addresses.forEach(({ address: ip }) => {
+                  const req = https.request({
+                    host: ip,
+                    port: u.port || 443,
+                    path: "/",
+                    method: "GET",
+                    servername: host,
+                    headers: { Host: host },
+                    rejectUnauthorized: false,
+                    timeout: 2500
+                  }, res => {
+                    if (res.statusCode !== 500 && res.statusCode !== 0) {
+                      console.log(`${ip} ${host}`);
+                      process.exit(0);
+                    }
+                    checked++;
+                    if (checked === addresses.length) process.exit(0);
+                  });
+                  req.on("error", () => {
+                    checked++;
+                    if (checked === addresses.length) process.exit(0);
+                  });
+                  req.end();
+                });
+              });
+            }
+          ' 2>/dev/null || true)
+          if [ -n "$HOST_PIN" ]; then
+            echo "State endpoint health resolution: $HOST_PIN"
+            echo "$HOST_PIN" | sudo tee -a /etc/hosts
+          fi
 
       - name: Download Plan Artifact
         uses: actions/download-artifact@v4
