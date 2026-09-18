@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/ArchProof/org-infra/compare/org-infra-v0.3.0...org-infra-v0.4.0) (2026-09-18)
+
+
+### Features
+
+* **modules:** per-repository governance stacks with fresh state ([#24](https://github.com/ArchProof/org-infra/issues/24)) ([31d9d2b](https://github.com/ArchProof/org-infra/commit/31d9d2b8582cb92dbff70b8ad1c35fee372ff721))
+
 ## [0.3.0](https://github.com/ArchProof/org-infra/compare/org-infra-v0.2.0...org-infra-v0.3.0) (2026-09-18)
 
 
