@@ -72,6 +72,9 @@ resource "github_repository_ruleset" "public" {
         required_check {
           context = "gitops-validate"
         }
+        required_check {
+          context = "gitops-plan"
+        }
       }
     }
   }
