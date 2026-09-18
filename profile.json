@@ -16,7 +16,6 @@
     "kind": "neon-s3",
     "region": "us-east-2",
     "key": "github/org-infra/state.tfstate",
-    "sandboxKey": "github/sandbox/state.tfstate",
     "endpointRef": "STATE_ENDPOINT",
     "bucketRef": "STATE_BUCKET",
     "accessKeyRef": "STATE_ACCESS_KEY",
