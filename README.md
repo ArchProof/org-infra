@@ -62,6 +62,19 @@ chmod +x ./scripts/sync-secrets-gh.sh
 
 ---
 
+## Versioning & Milestone Releases
+
+This repository uses **Google Release-Please** for automated Semantic Versioning driven by Conventional Commits (`feat:`, `fix:`, `chore:`, `BREAKING CHANGE:`).
+
+1. **Automated Release PR**: Pushes to `main` evaluate commit messages and update or open a pending Release PR containing an updated `CHANGELOG.md` and bumped SemVer tag.
+2. **App-Authenticated Branch Protection**: The workflow utilizes the Governance GitHub App (`appId` from `profile.json` or `vars.RELEASE_APP_ID`) to open the PR, ensuring the required `gitops-validate` branch ruleset check triggers and passes.
+3. **Milestone Audit Snapshots**: When a release is published, `.github/workflows/release-milestone.yml` automatically snapshots the milestone:
+   - Calculates deterministic SHA256 checksums of `catalog.json`, `profile.json`, and `.terraform.lock.hcl`.
+   - Generates a structured `audit-manifest-vX.Y.Z.json`.
+   - Uploads the audit record directly to the GitHub Release assets, turning releases into an immutable historical record of what was actually governed and deployed.
+
+---
+
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
 
