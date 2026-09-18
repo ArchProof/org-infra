@@ -14,11 +14,11 @@
   "pemPathRef": "GOVERNANCE_PEM_PATH",
   "state": {
     "kind": "neon-s3",
-    "endpoint": "https://br-lingering-dust-b47g6top.storage.c-6.us-east-2.aws.neon.tech",
     "region": "us-east-2",
-    "bucket": "uploads",
     "key": "github/org-infra/state.tfstate",
     "sandboxKey": "github/sandbox/state.tfstate",
+    "endpointRef": "STATE_ENDPOINT",
+    "bucketRef": "STATE_BUCKET",
     "accessKeyRef": "STATE_ACCESS_KEY",
     "secretKeyRef": "STATE_SECRET_KEY"
   }

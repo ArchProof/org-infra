@@ -26,6 +26,35 @@ Remove-Item Env:GITHUB_APP_ID,Env:GITHUB_APP_INSTALLATION_ID,Env:GITHUB_APP_PEM_
 
 ---
 
+## Secret Synchronization & Setup for a New Organization
+
+This repository is self-contained. Sensitive storage URLs and buckets are never committed to Git and are instead injected from GitHub Secrets at runtime.
+
+### 1. Configure Secret References
+Copy the example references file:
+```powershell
+cp secret-references.example.json secret-references.json
+```
+
+Set environment variables pointing to your credentials or files:
+```powershell
+$env:GOVERNANCE_PEM_PATH   = "C:\keys\app.pem"
+$env:STATE_ACCESS_KEY_FILE = "C:\keys\access_key.txt"
+$env:STATE_SECRET_KEY_FILE = "C:\keys\secret_key.txt"
+$env:STATE_ENDPOINT_FILE   = "C:\keys\endpoint.txt"   # contains: https://...storage.c-6...neon.tech
+$env:STATE_BUCKET_FILE     = "C:\keys\bucket.txt"     # contains: uploads
+```
+
+### 2. Synchronize Secrets to GitHub
+Install dependencies and run the sync script:
+```powershell
+npm install
+npm run sync-secrets
+```
+*(Alternatively, you can provide `GITHUB_TOKEN=ghp_...` instead of a GitHub App PEM file).*
+
+---
+
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
 

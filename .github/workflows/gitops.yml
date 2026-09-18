@@ -44,6 +44,9 @@ jobs:
 
       - name: Extract Environment from Profile
         id: profile
+        env:
+          STATE_ENDPOINT: ${{ secrets.STATE_ENDPOINT }}
+          STATE_BUCKET: ${{ secrets.STATE_BUCKET }}
         run: |
           echo "GITHUB_APP_ID=$(jq -r .appId profile.json)" >> "$GITHUB_ENV"
           echo "GITHUB_APP_INSTALLATION_ID=$(jq -r .installationId profile.json)" >> "$GITHUB_ENV"
@@ -51,11 +54,11 @@ jobs:
           echo "TF_VAR_single_owner=$(jq -r .singleOwner profile.json)" >> "$GITHUB_ENV"
 
           # Generate OpenTofu S3 backend configuration matching archproof spec
-          jq '{
-            bucket: .state.bucket,
+          jq --arg ep "$STATE_ENDPOINT" --arg b "$STATE_BUCKET" '{
+            bucket: (if .state.bucket then .state.bucket else $b end),
             key: .state.key,
             region: .state.region,
-            endpoints: { s3: .state.endpoint },
+            endpoints: { s3: (if .state.endpoint then .state.endpoint else $ep end) },
             use_path_style: true,
             use_lockfile: true,
             skip_credentials_validation: true,
@@ -71,8 +74,9 @@ jobs:
             const https = require("https");
             const fs = require("fs");
             const profile = JSON.parse(fs.readFileSync("profile.json", "utf8"));
-            if (profile.state && profile.state.endpoint) {
-              const u = new URL(profile.state.endpoint);
+            const ep = process.env.STATE_ENDPOINT || (profile.state && profile.state.endpoint);
+            if (ep) {
+              const u = new URL(ep);
               const host = u.hostname;
               dns.lookup(host, { all: true, family: 4 }, (err, addresses) => {
                 if (err || !addresses || addresses.length <= 1) process.exit(0);
@@ -222,6 +226,9 @@ jobs:
 
       - name: Extract Environment from Profile
         id: profile
+        env:
+          STATE_ENDPOINT: ${{ secrets.STATE_ENDPOINT }}
+          STATE_BUCKET: ${{ secrets.STATE_BUCKET }}
         run: |
           echo "GITHUB_APP_ID=$(jq -r .appId profile.json)" >> "$GITHUB_ENV"
           echo "GITHUB_APP_INSTALLATION_ID=$(jq -r .installationId profile.json)" >> "$GITHUB_ENV"
@@ -229,11 +236,11 @@ jobs:
           echo "TF_VAR_single_owner=$(jq -r .singleOwner profile.json)" >> "$GITHUB_ENV"
 
           # Generate OpenTofu S3 backend configuration matching archproof spec
-          jq '{
-            bucket: .state.bucket,
+          jq --arg ep "$STATE_ENDPOINT" --arg b "$STATE_BUCKET" '{
+            bucket: (if .state.bucket then .state.bucket else $b end),
             key: .state.key,
             region: .state.region,
-            endpoints: { s3: .state.endpoint },
+            endpoints: { s3: (if .state.endpoint then .state.endpoint else $ep end) },
             use_path_style: true,
             use_lockfile: true,
             skip_credentials_validation: true,
@@ -249,8 +256,9 @@ jobs:
             const https = require("https");
             const fs = require("fs");
             const profile = JSON.parse(fs.readFileSync("profile.json", "utf8"));
-            if (profile.state && profile.state.endpoint) {
-              const u = new URL(profile.state.endpoint);
+            const ep = process.env.STATE_ENDPOINT || (profile.state && profile.state.endpoint);
+            if (ep) {
+              const u = new URL(ep);
               const host = u.hostname;
               dns.lookup(host, { all: true, family: 4 }, (err, addresses) => {
                 if (err || !addresses || addresses.length <= 1) process.exit(0);
