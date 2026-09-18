@@ -1,4 +1,4 @@
-﻿name: Release Milestone Snapshot
+name: Release Milestone Snapshot
 
 on:
   release:
