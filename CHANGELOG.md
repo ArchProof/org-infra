@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/ArchProof/org-infra/compare/org-infra-v0.2.0...org-infra-v0.3.0) (2026-09-18)
+
+
+### Features
+
+* **catalog:** add maf-intro repository to the organization catalog ([#21](https://github.com/ArchProof/org-infra/issues/21)) ([dd5f9b6](https://github.com/ArchProof/org-infra/commit/dd5f9b6283254cce7f1b637afdd7aa7d141f7e5f))
+
 ## [0.2.0](https://github.com/ArchProof/org-infra/compare/org-infra-v0.1.0...org-infra-v0.2.0) (2026-09-18)
 
 
