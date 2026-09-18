@@ -45,13 +45,16 @@ $env:STATE_ENDPOINT_FILE   = "C:\keys\endpoint.txt"   # contains: https://...sto
 $env:STATE_BUCKET_FILE     = "C:\keys\bucket.txt"     # contains: uploads
 ```
 
-### 2. Synchronize Secrets to GitHub
-Install dependencies and run the sync script:
+### 2. Synchronize Secrets to GitHub (via GitHub CLI)
+Ensure `gh` CLI is installed and authenticated (`gh auth login` or `$env:GH_TOKEN`), then run:
 ```powershell
-npm install
-npm run sync-secrets
+node scripts/sync-secrets.mjs
+# or on Windows PowerShell:
+./scripts/sync-secrets-gh.ps1
+# or on Linux / macOS Bash:
+./scripts/sync-secrets-gh.sh
 ```
-*(Alternatively, you can provide `GITHUB_TOKEN=ghp_...` instead of a GitHub App PEM file).*
+*(Zero external npm packages or `node_modules` required — uses native `gh` CLI).*
 
 ---
 
