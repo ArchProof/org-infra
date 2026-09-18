@@ -27,7 +27,7 @@ jobs:
           mkdir -p evidence/releases
 
           COMMIT_SHA=$(git rev-parse HEAD)
-          CATALOG_SHA=$(sha256sum catalog.json | awk '{print $1}')
+          INFRA_SHA=$(sha256sum main.tf | awk '{print $1}')
           PROFILE_SHA=$(sha256sum profile.json | awk '{print $1}')
           LOCK_SHA=$(sha256sum .terraform.lock.hcl | awk '{print $1}')
 
@@ -36,11 +36,11 @@ jobs:
             --arg tag "$RELEASE_TAG" \
             --arg commit "$COMMIT_SHA" \
             --arg time "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
-            --arg catalog_sha "$CATALOG_SHA" \
+            --arg infra_sha "$INFRA_SHA" \
             --arg profile_sha "$PROFILE_SHA" \
             --arg lock_sha "$LOCK_SHA" \
             '{
-              schemaVersion: "archproof.release-audit/v1",
+              schemaVersion: "archproof.release-audit/v2",
               releaseTag: $tag,
               commitSha: $commit,
               snapshotTimestamp: $time,
@@ -48,9 +48,9 @@ jobs:
                 runtime: "opentofu",
                 version: "1.12.0"
               },
-              managedCatalog: {
-                sha256: $catalog_sha,
-                repositories: (try (input | keys) catch [])
+              managedInfrastructure: {
+                sha256: $infra_sha,
+                source: "main.tf"
               },
               providerLock: {
                 sha256: $lock_sha
@@ -58,7 +58,7 @@ jobs:
               stateTarget: {
                 profileSha256: $profile_sha
               }
-            }' catalog.json > "evidence/releases/audit-manifest-${RELEASE_TAG}.json"
+            }' > "evidence/releases/audit-manifest-${RELEASE_TAG}.json"
 
           echo "## 🏷️ Release Milestone Snapshot Created" >> $GITHUB_STEP_SUMMARY
           echo "Audit manifest generated for release \`$RELEASE_TAG\` (commit \`$COMMIT_SHA\`)." >> $GITHUB_STEP_SUMMARY

@@ -5,10 +5,29 @@ This repository manages GitHub organization repositories, rulesets, and environm
 ## Scope & Principles
 
 - **OpenTofu 1.12.0** with `integrations/github` provider pinned to **6.13.0**.
-- **Organization Catalog**: Declared in `catalog.json` covering the stable repository keys (`org-infra`, `missions`, `workflows`, `actions`, `kill-the-secrets`, `platform`, `learner-state`).
-- **Protected Branch Rules**: Enforced automatically on all public repositories (`gitops-main` ruleset).
+- **Repository Modules**: Each organization repository is an explicit `module` block in `main.tf`, composed from `modules/repository-stack` (repository + optional `gitops-main` branch ruleset + optional protected `gitops` environment). Adding a repository means adding one module block.
+- **Protected Branch Rules**: Enforced on each public repository that opts in via `manage_ruleset = true` (`gitops-main` ruleset) with per-repository `required_checks`. GitHub Free only allows rulesets on public repositories.
 - **Environment Protections**: Deployments to the `gitops` environment require review from verified organization members declared in `variables.tf`.
-- **Zero Ambiguous Retries / Protection against accidental destruction**: All managed repositories and rulesets enforce `prevent_destroy = true`.
+- **Zero Ambiguous Retries / Protection against accidental destruction**: All managed repositories, rulesets, and environments enforce `prevent_destroy = true`.
+
+---
+
+## Adding a Repository
+
+Append one module block to `main.tf` and open a PR; the speculative plan previews it before the protected apply:
+
+```hcl
+module "my_new_repo" {
+  source          = "./modules/repository-stack"
+  name            = "my-new-repo"
+  visibility      = "public"
+  manage_ruleset  = true
+  required_checks = ["ci"] # only checks that already run on the repo's PRs
+  single_owner    = var.single_owner
+}
+```
+
+`manage_environment = true` additionally manages the protected `gitops` deployment environment (public repositories only under GitHub Free). Repositories, rulesets, and environments are guarded by `prevent_destroy`; removing a managed object always requires explicitly relaxing that guard in a reviewed change.
 
 ---
 
@@ -85,21 +104,24 @@ This repository uses **Google Release-Please** for automated Semantic Versioning
 
 ## Providers
 
-| Name | Version |
-|------|---------|
-| <a name="provider_github"></a> [github](#provider\_github) | 6.13.0 |
+No providers.
 
 ## Modules
 
-No modules.
+| Name | Source | Version |
+|------|--------|---------|
+| <a name="module_actions"></a> [actions](#module\_actions) | ./modules/repository-stack | n/a |
+| <a name="module_kill_the_secrets"></a> [kill\_the\_secrets](#module\_kill\_the\_secrets) | ./modules/repository-stack | n/a |
+| <a name="module_learner_state"></a> [learner\_state](#module\_learner\_state) | ./modules/repository-stack | n/a |
+| <a name="module_maf_intro"></a> [maf\_intro](#module\_maf\_intro) | ./modules/repository-stack | n/a |
+| <a name="module_missions"></a> [missions](#module\_missions) | ./modules/repository-stack | n/a |
+| <a name="module_org_infra"></a> [org\_infra](#module\_org\_infra) | ./modules/repository-stack | n/a |
+| <a name="module_platform"></a> [platform](#module\_platform) | ./modules/repository-stack | n/a |
+| <a name="module_workflows"></a> [workflows](#module\_workflows) | ./modules/repository-stack | n/a |
 
 ## Resources
 
-| Name | Type |
-|------|------|
-| [github_repository.catalog](https://registry.terraform.io/providers/integrations/github/6.13.0/docs/resources/repository) | resource |
-| [github_repository_environment.gitops](https://registry.terraform.io/providers/integrations/github/6.13.0/docs/resources/repository_environment) | resource |
-| [github_repository_ruleset.public](https://registry.terraform.io/providers/integrations/github/6.13.0/docs/resources/repository_ruleset) | resource |
+No resources.
 
 ## Inputs
 
@@ -112,5 +134,5 @@ No modules.
 
 | Name | Description |
 |------|-------------|
-| <a name="output_repositories"></a> [repositories](#output\_repositories) | Stable catalog identities; no contents or credentials. |
+| <a name="output_repositories"></a> [repositories](#output\_repositories) | Stable repository identities; no contents or credentials. |
 <!-- END_TF_DOCS -->
