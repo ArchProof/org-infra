@@ -3,6 +3,12 @@ name: Protected GitOps
 on:
   push:
     branches: [main]
+    # Release commits (CHANGELOG + manifest only) never carry infrastructure
+    # deltas; skipping them avoids a queued no-op plan behind any pending apply.
+    paths-ignore:
+      - 'CHANGELOG.md'
+      - '.release-please-manifest.json'
+      - 'release-please-config.json'
   workflow_dispatch:
   schedule:
     - cron: '23 6 * * *' # Daily drift check

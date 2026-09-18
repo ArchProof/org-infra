@@ -1,0 +1,71 @@
+﻿name: Release Milestone Snapshot
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    name: Snapshot Infrastructure Milestone
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository at release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Build Milestone Audit Manifest
+        id: manifest
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_ID: ${{ github.event.release.id }}
+          RELEASE_URL: ${{ github.event.release.html_url }}
+        run: |
+          mkdir -p evidence/releases
+
+          COMMIT_SHA=$(git rev-parse HEAD)
+          CATALOG_SHA=$(sha256sum catalog.json | awk '{print $1}')
+          PROFILE_SHA=$(sha256sum profile.json | awk '{print $1}')
+          LOCK_SHA=$(sha256sum .terraform.lock.hcl | awk '{print $1}')
+
+          # Generate structured audit record
+          jq -n \
+            --arg tag "$RELEASE_TAG" \
+            --arg commit "$COMMIT_SHA" \
+            --arg time "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+            --arg catalog_sha "$CATALOG_SHA" \
+            --arg profile_sha "$PROFILE_SHA" \
+            --arg lock_sha "$LOCK_SHA" \
+            '{
+              schemaVersion: "archproof.release-audit/v1",
+              releaseTag: $tag,
+              commitSha: $commit,
+              snapshotTimestamp: $time,
+              iacEngine: {
+                runtime: "opentofu",
+                version: "1.12.0"
+              },
+              managedCatalog: {
+                sha256: $catalog_sha,
+                repositories: (try (input | keys) catch [])
+              },
+              providerLock: {
+                sha256: $lock_sha
+              },
+              stateTarget: {
+                profileSha256: $profile_sha
+              }
+            }' catalog.json > "evidence/releases/audit-manifest-${RELEASE_TAG}.json"
+
+          echo "## 🏷️ Release Milestone Snapshot Created" >> $GITHUB_STEP_SUMMARY
+          echo "Audit manifest generated for release \`$RELEASE_TAG\` (commit \`$COMMIT_SHA\`)." >> $GITHUB_STEP_SUMMARY
+
+      - name: Attach Audit Manifest to GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release upload "$TAG" "evidence/releases/audit-manifest-${TAG}.json" --clobber

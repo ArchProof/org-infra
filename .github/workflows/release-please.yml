@@ -1,0 +1,64 @@
+﻿name: release-please
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    name: Automated Semantic Release
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve GitHub App ID
+        if: env.HAS_PEM == 'true'
+        id: resolve-app-id
+        env:
+          HAS_PEM: ${{ secrets.GOVERNANCE_PEM != '' }}
+        run: |
+          APP_ID="${{ vars.RELEASE_APP_ID }}"
+          if [ -z "$APP_ID" ]; then
+            APP_ID=$(jq -r '.appId' profile.json)
+          fi
+          echo "app_id=$APP_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Generate GitHub App Token
+        if: env.HAS_PEM == 'true'
+        uses: actions/create-github-app-token@v2
+        id: app-token
+        env:
+          HAS_PEM: ${{ secrets.GOVERNANCE_PEM != '' }}
+        with:
+          app-id: ${{ steps.resolve-app-id.outputs.app_id }}
+          private-key: ${{ secrets.GOVERNANCE_PEM }}
+
+      - name: Run Release-Please
+        uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      - name: Enable auto-merge on release PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+        run: |
+          for pr in $(gh pr list --label "autorelease: pending" --state open --json number --jq '.[].number'); do
+            if ! gh pr merge --auto --squash "$pr"; then
+              echo "::warning::Auto-merge unavailable for PR #$pr — repo setting allow_auto_merge is applied via Terraform; retry happens on the next push to main."
+            fi
+          done
