@@ -6,9 +6,5 @@
   "description": "ArchProof organization infrastructure GitOps control",
   "scripts": {
     "sync-secrets": "node scripts/sync-secrets.mjs"
-  },
-  "dependencies": {
-    "libsodium": "^0.7.15",
-    "libsodium-wrappers": "^0.7.15"
   }
 }

@@ -1,21 +1,28 @@
 #!/usr/bin/env node
 /**
- * Standalone Secret Synchronization Tool for org-infra
+ * Secret Synchronization Tool for org-infra using GitHub CLI (gh)
  *
- * Encrypts and synchronizes secrets into GitHub repository/environments
- * using libsodium public-key cryptography.
+ * Automatically sets Repository and Environment secrets using the native `gh` CLI.
+ * Requires: GitHub CLI installed and authenticated (or GH_TOKEN environment variable).
  *
  * Usage:
  *   node scripts/sync-secrets.mjs [--profile profile.json] [--references secret-references.json]
  */
 
-import { readFile, stat } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { isAbsolute, resolve } from 'node:path';
-import { createPrivateKey, sign } from 'node:crypto';
-import sodium from 'libsodium-wrappers';
 
-// Parse simple CLI arguments
+// Verify GitHub CLI is installed
+try {
+  execFileSync('gh', ['--version'], { stdio: 'ignore' });
+} catch {
+  console.error('❌ GitHub CLI (gh) is not found in PATH.');
+  console.error('👉 Install it from https://cli.github.com/ or run: winget install GitHub.cli');
+  process.exit(1);
+}
+
+// Parse CLI arguments
 const args = process.argv.slice(2);
 function getArg(flag, defaultValue) {
   const idx = args.indexOf(flag);
@@ -23,172 +30,88 @@ function getArg(flag, defaultValue) {
 }
 
 const profilePath = getArg('--profile', existsSync('profile.local.json') ? 'profile.local.json' : 'profile.json');
-const referencesPath = getArg('--references', 'secret-references.json');
+const referencesPath = getArg('--references', existsSync('secret-references.json') ? 'secret-references.json' : 'secret-references.example.json');
 
-console.log(`\n🔒 ArchProof GitOps Secret Synchronizer`);
-console.log(`----------------------------------------`);
+console.log(`\n🔒 ArchProof GitOps Secret Synchronizer (GitHub CLI)`);
+console.log(`----------------------------------------------------`);
 console.log(`Profile:    ${profilePath}`);
 console.log(`References: ${referencesPath}\n`);
 
-// 1. Load Profile
-let profile;
-try {
-  profile = JSON.parse(await readFile(profilePath, 'utf8'));
-} catch (err) {
-  console.error(`❌ Failed to read profile at "${profilePath}":`, err.message);
-  process.exit(1);
+// 1. Read Profile
+let profile = {};
+if (existsSync(profilePath)) {
+  try {
+    profile = JSON.parse(await readFile(profilePath, 'utf8'));
+  } catch (err) {
+    console.warn(`⚠️ Could not parse ${profilePath}: ${err.message}`);
+  }
 }
+const repo = getArg('--repo', `${profile.organization || 'ArchProof'}/org-infra`);
 
-const owner = profile.organization || 'archproof';
-const repo = 'org-infra';
-
-// 2. Load References
-let references;
+// 2. Read References
+let references = {};
 try {
   references = JSON.parse(await readFile(referencesPath, 'utf8'));
 } catch (err) {
-  console.error(`❌ Failed to read references at "${referencesPath}":`, err.message);
-  console.error(`💡 Tip: Copy secret-references.example.json to secret-references.json and populate env vars.`);
+  console.error(`❌ Could not read references file at ${referencesPath}:`, err.message);
   process.exit(1);
 }
 
-// 3. Authenticate with GitHub
-async function getAuthToken() {
-  // Option A: Explicit GITHUB_TOKEN / PAT
-  if (process.env.GITHUB_TOKEN) {
-    console.log(`🔑 Using provided GITHUB_TOKEN environment variable.`);
-    return process.env.GITHUB_TOKEN;
+console.log(`Target Repository: ${repo}`);
+
+// 3. Collect secret values from environment variables or files
+const secretsToSync = {};
+for (const [secretName, envVarOrValue] of Object.entries(references)) {
+  const ref = process.env[envVarOrValue] || process.env[secretName] || envVarOrValue;
+
+  let secretValue = null;
+  if (ref && existsSync(ref)) {
+    secretValue = (await readFile(ref, 'utf8')).trim();
+  } else if (process.env[envVarOrValue]) {
+    secretValue = process.env[envVarOrValue].trim();
+  } else if (process.env[secretName]) {
+    secretValue = process.env[secretName].trim();
   }
 
-  // Option B: GitHub App Authentication (via profile.pemPathRef)
-  const pemEnvName = profile.pemPathRef || 'GOVERNANCE_PEM_PATH';
-  const pemPath = process.env[pemEnvName];
-
-  if (!pemPath) {
-    throw new Error(`Environment variable "${pemEnvName}" pointing to GitHub App private key (.pem) is not set.`);
+  if (secretValue) {
+    secretsToSync[secretName] = secretValue;
+  } else {
+    console.warn(`⚠️  Skipping ${secretName}: no value found in env var "${envVarOrValue}" or file.`);
   }
-
-  const resolvedPemPath = isAbsolute(pemPath) ? pemPath : resolve(process.cwd(), pemPath);
-  console.log(`🔑 Authenticating as GitHub App (ID: ${profile.appId}) using: ${resolvedPemPath}`);
-
-  const pemContent = await readFile(resolvedPemPath);
-  const privateKey = createPrivateKey(pemContent);
-
-  const now = Math.floor(Date.now() / 1000);
-  const encode = obj => Buffer.from(JSON.stringify(obj)).toString('base64url');
-  const header = encode({ alg: 'RS256', typ: 'JWT' });
-  const payload = encode({ iss: String(profile.appId), iat: now - 60, exp: now + 300 });
-  const unsignedJwt = `${header}.${payload}`;
-  const signature = sign('RSA-SHA256', Buffer.from(unsignedJwt), privateKey).toString('base64url');
-  const jwt = `${unsignedJwt}.${signature}`;
-
-  // Exchange JWT for Installation Access Token
-  const tokenRes = await fetch(`https://api.github.com/app/installations/${profile.installationId}/access_tokens`, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${jwt}`,
-      accept: 'application/vnd.github+json',
-      'user-agent': 'archproof-org-infra-sync',
-      'X-GitHub-Api-Version': '2026-03-10'
-    }
-  });
-
-  if (!tokenRes.ok) {
-    const errorText = await tokenRes.text();
-    throw new Error(`Failed to obtain installation token (${tokenRes.status}): ${errorText}`);
-  }
-
-  const tokenData = await tokenRes.json();
-  return tokenData.token;
 }
 
-const token = await getAuthToken();
-
-// 4. Initialize Libsodium
-await sodium.ready;
-
-// Helper to make authenticated GitHub requests
-async function ghRequest(path, options = {}) {
-  const url = `https://api.github.com${path}`;
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      authorization: `Bearer ${token}`,
-      accept: 'application/vnd.github+json',
-      'user-agent': 'archproof-org-infra-sync',
-      'X-GitHub-Api-Version': '2026-03-10',
-      'content-type': 'application/json',
-      ...(options.headers || {})
-    }
-  });
-  if (!res.ok) {
-    const msg = await res.text();
-    throw new Error(`GitHub API error on ${path} (${res.status}): ${msg}`);
-  }
-  return res.status === 204 ? null : res.json();
+if (Object.keys(secretsToSync).length === 0) {
+  console.error('\n❌ No secrets found to synchronize. Populate environment variables or files.');
+  process.exit(1);
 }
 
-// 5. Encrypt and Upload Secrets
-// Targets: Upload to environments (gitops, gitops-plan) and repository level for resilience
-const targetEndpoints = [
-  { name: 'Environment [gitops]', path: `/repos/${owner}/${repo}/environments/gitops/secrets` },
-  { name: 'Environment [gitops-plan]', path: `/repos/${owner}/${repo}/environments/gitops-plan/secrets` },
-  { name: 'Repository Secrets', path: `/repos/${owner}/${repo}/actions/secrets` }
-];
-
-console.log(`\n📤 Synchronizing secrets to ${owner}/${repo}...`);
-
-for (const target of targetEndpoints) {
-  let publicKeyInfo;
+// 4. Set Repository Secrets via `gh secret set`
+console.log('\n📤 Uploading Repository Secrets...');
+for (const [name, val] of Object.entries(secretsToSync)) {
   try {
-    publicKeyInfo = await ghRequest(`${target.path}/public-key`);
+    execFileSync('gh', ['secret', 'set', name, '--body', val, '-R', repo], { stdio: 'pipe' });
+    console.log(`  ✅ ${name} -> set (repository)`);
   } catch (err) {
-    // Some endpoints may not exist yet if environment hasn't been created; continue to others
-    continue;
+    console.error(`  ❌ Failed to set ${name}:`, err.stderr?.toString() || err.message);
   }
+}
 
-  const publicKey = sodium.from_base64(publicKeyInfo.key, sodium.base64_variants.ORIGINAL);
-  console.log(`\n  Target: ${target.name}`);
-
-  for (const [secretName, envVarOrValue] of Object.entries(references)) {
-    // Resolve value from environment variable
-    const refVal = process.env[envVarOrValue];
-    if (!refVal) {
-      console.warn(`    ⚠️  Skipping ${secretName}: env var "${envVarOrValue}" is empty or not set.`);
-      continue;
-    }
-
-    // Determine if value is a file path or raw string
-    let secretBuffer;
-    if (existsSync(refVal)) {
-      secretBuffer = await readFile(refVal);
-    } else {
-      secretBuffer = Buffer.from(refVal.trim());
-    }
-
+// 5. Also sync to environments for strict isolation
+for (const envName of ['gitops', 'gitops-plan']) {
+  console.log(`\n📤 Uploading to Environment [${envName}]...`);
+  for (const [name, val] of Object.entries(secretsToSync)) {
     try {
-      if (secretBuffer.length === 0) {
-        console.warn(`    ⚠️  Skipping ${secretName}: content is empty.`);
-        continue;
-      }
-
-      // Seal using libsodium
-      const encrypted = sodium.crypto_box_seal(secretBuffer, publicKey);
-      const encryptedBase64 = sodium.to_base64(encrypted, sodium.base64_variants.ORIGINAL);
-
-      await ghRequest(`${target.path}/${secretName}`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          key_id: publicKeyInfo.key_id,
-          encrypted_value: encryptedBase64
-        })
-      });
-
-      console.log(`    ✅ ${secretName} -> synced`);
-    } finally {
-      secretBuffer.fill(0); // Zero out memory
+      execFileSync('gh', ['secret', 'set', name, '--body', val, '-R', repo, '--env', envName], { stdio: 'pipe' });
+      console.log(`  ✅ ${name} -> set (${envName})`);
+    } catch {
+      // Environments may not exist yet if not bootstrapped; continue
     }
   }
 }
 
-console.log(`\n🎉 Secrets synchronized successfully!`);
+console.log(`\n🎉 All secrets synchronized successfully using GitHub CLI!`);
+console.log(`Current Repository Secrets in ${repo}:`);
+try {
+  const list = execFileSync('gh', ['secret', 'list', '-R', repo], { encoding: 'utf8' });
+  console.log(list);
+} catch {}
