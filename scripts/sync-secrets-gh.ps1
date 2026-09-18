@@ -40,5 +40,5 @@ if ($pemPath -and (Test-Path $pemPath)) {
   Write-Host "  ✅ GOVERNANCE_PEM -> set" -ForegroundColor Green
 }
 
-Write-Host "`nSync complete! Current secrets for $Repo:" -ForegroundColor Cyan
+Write-Host "`nSync complete! Current secrets for ${Repo}:" -ForegroundColor Cyan
 gh secret list -R $Repo

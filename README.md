@@ -47,14 +47,18 @@ $env:STATE_BUCKET_FILE     = "C:\keys\bucket.txt"     # contains: uploads
 
 ### 2. Synchronize Secrets to GitHub (via GitHub CLI)
 Ensure `gh` CLI is installed and authenticated (`gh auth login` or `$env:GH_TOKEN`), then run:
+
+**On Windows PowerShell:**
 ```powershell
-node scripts/sync-secrets.mjs
-# or on Windows PowerShell:
 ./scripts/sync-secrets-gh.ps1
-# or on Linux / macOS Bash:
+```
+
+**On Linux / macOS Bash:**
+```bash
+chmod +x ./scripts/sync-secrets-gh.sh
 ./scripts/sync-secrets-gh.sh
 ```
-*(Zero external npm packages or `node_modules` required — uses native `gh` CLI).*
+*(Zero Node.js runtime or npm dependencies required — uses native `gh` CLI).*
 
 ---
 
