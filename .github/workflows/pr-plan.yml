@@ -1,0 +1,199 @@
+name: Speculative Plan
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  # Per-PR plans; a new push supersedes the stale preview immediately.
+  # Deliberately outside the archproof-github-state group so previews
+  # never queue behind (or block) serialized production applies.
+  group: pr-plan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: gitops-plan
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version: 1.12.0
+          tofu_wrapper: false
+
+      - name: Cache OpenTofu Plugins
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/plugin-cache
+          key: ${{ runner.os }}-opentofu-${{ hashFiles('**/.terraform.lock.hcl') }}
+
+      - name: Check plan availability
+        id: gate
+        env:
+          # Fork pull requests receive no secrets; preview degrades to a notice.
+          HAS_STATE: ${{ secrets.STATE_ACCESS_KEY != '' }}
+        run: echo "enabled=$HAS_STATE" >> "$GITHUB_OUTPUT"
+
+      - name: Extract Environment from Profile
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          STATE_ENDPOINT: ${{ secrets.STATE_ENDPOINT }}
+          STATE_BUCKET: ${{ secrets.STATE_BUCKET }}
+        run: |
+          echo "GITHUB_APP_ID=$(jq -r .appId profile.json)" >> "$GITHUB_ENV"
+          echo "GITHUB_APP_INSTALLATION_ID=$(jq -r .installationId profile.json)" >> "$GITHUB_ENV"
+          echo "TF_VAR_reviewer_ids=$(jq -c '[.reviewers[].id]' profile.json)" >> "$GITHUB_ENV"
+          echo "TF_VAR_single_owner=$(jq -r .singleOwner profile.json)" >> "$GITHUB_ENV"
+
+          jq --arg ep "$STATE_ENDPOINT" --arg b "$STATE_BUCKET" '{
+            bucket: (if .state.bucket then .state.bucket else $b end),
+            key: .state.key,
+            region: .state.region,
+            endpoints: { s3: (if .state.endpoint then .state.endpoint else $ep end) },
+            use_path_style: true,
+            use_lockfile: true,
+            skip_credentials_validation: true,
+            skip_region_validation: true,
+            skip_metadata_api_check: true,
+            skip_requesting_account_id: true,
+            skip_s3_checksum: true
+          }' profile.json > "${{ runner.temp }}/backend.json"
+
+          # Ensure healthy state storage endpoint resolution (guards against transient AWS ELB node failures)
+          HOST_PIN=$(node -e '
+            const dns = require("dns");
+            const https = require("https");
+            const fs = require("fs");
+            const profile = JSON.parse(fs.readFileSync("profile.json", "utf8"));
+            const ep = process.env.STATE_ENDPOINT || (profile.state && profile.state.endpoint);
+            if (ep) {
+              const u = new URL(ep);
+              const host = u.hostname;
+              dns.lookup(host, { all: true, family: 4 }, (err, addresses) => {
+                if (err || !addresses || addresses.length <= 1) process.exit(0);
+                let checked = 0;
+                addresses.forEach(({ address: ip }) => {
+                  const req = https.request({
+                    host: ip,
+                    port: u.port || 443,
+                    path: "/",
+                    method: "GET",
+                    servername: host,
+                    headers: { Host: host },
+                    rejectUnauthorized: false,
+                    timeout: 2500
+                  }, res => {
+                    if (res.statusCode !== 500 && res.statusCode !== 0) {
+                      console.log(`${ip} ${host}`);
+                      process.exit(0);
+                    }
+                    checked++;
+                    if (checked === addresses.length) process.exit(0);
+                  });
+                  req.on("error", () => {
+                    checked++;
+                    if (checked === addresses.length) process.exit(0);
+                  });
+                  req.end();
+                });
+              });
+            }
+          ' 2>/dev/null || true)
+          if [ -n "$HOST_PIN" ]; then
+            echo "State endpoint health resolution: $HOST_PIN"
+            echo "$HOST_PIN" | sudo tee -a /etc/hosts
+          fi
+
+      - name: OpenTofu Init
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/plugin-cache
+          AWS_ACCESS_KEY_ID: ${{ secrets.STATE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.STATE_SECRET_KEY }}
+          AWS_EC2_METADATA_DISABLED: "true"
+        run: |
+          mkdir -p "${{ runner.temp }}/plugin-cache"
+          export AWS_ACCESS_KEY_ID="$(printf '%s' "$AWS_ACCESS_KEY_ID" | tr -d '\r\n[:space:]')"
+          export AWS_SECRET_ACCESS_KEY="$(printf '%s' "$AWS_SECRET_ACCESS_KEY" | tr -d '\r\n[:space:]')"
+          tofu init -input=false -backend-config="${{ runner.temp }}/backend.json"
+
+      - name: OpenTofu Plan
+        if: steps.gate.outputs.enabled == 'true'
+        id: plan
+        env:
+          GITHUB_APP_PEM_FILE: ${{ secrets.GOVERNANCE_PEM }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.STATE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.STATE_SECRET_KEY }}
+          AWS_EC2_METADATA_DISABLED: "true"
+        run: |
+          export AWS_ACCESS_KEY_ID="$(printf '%s' "$AWS_ACCESS_KEY_ID" | tr -d '\r\n[:space:]')"
+          export AWS_SECRET_ACCESS_KEY="$(printf '%s' "$AWS_SECRET_ACCESS_KEY" | tr -d '\r\n[:space:]')"
+          set +e
+          tofu plan -detailed-exitcode -no-color -lock-timeout=60s > "${{ runner.temp }}/plan.txt" 2>&1
+          EXITCODE=$?
+          set -e
+          if [ $EXITCODE -eq 0 ]; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          elif [ $EXITCODE -eq 2 ]; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          elif [ $EXITCODE -eq 1 ]; then
+            cat "${{ runner.temp }}/plan.txt"
+            echo "::error::OpenTofu plan failed with an error."
+            exit 1
+          fi
+
+      - name: Post Speculative Plan to PR
+        if: always() && !github.event.pull_request.head.repo.fork
+        uses: actions/github-script@v7
+        env:
+          PLAN_ENABLED: ${{ steps.gate.outputs.enabled }}
+          HAS_CHANGES: ${{ steps.plan.outputs.has_changes }}
+        with:
+          script: |
+            const enabled = process.env.PLAN_ENABLED === 'true';
+            const head = context.payload.pull_request.head.sha.slice(0, 7);
+
+            let body;
+            if (!enabled) {
+              body = `### 🔮 Speculative Plan: ⏭️ Skipped\n\nNo state credentials available for this pull request (fork or unconfigured secrets). The authoritative plan still runs on merge.`;
+            } else if (process.env.HAS_CHANGES === 'false') {
+              body = `### 🔮 Speculative Plan (${head}): ✅ No changes\n\nInfrastructure matches Git configuration for this pull request.`;
+            } else {
+              const fs = require('fs');
+              let plan = '';
+              try { plan = fs.readFileSync(`${process.env.RUNNER_TEMP}/plan.txt`, 'utf8'); } catch (e) {}
+              body = `### 🔮 Speculative Plan (${head}): ⚠️ ${process.env.HAS_CHANGES === 'true' ? 'Changes detected' : 'Unavailable'}\n\nPreview against current remote state. The authoritative plan runs after merge and is the one gated by the \`gitops\` environment review.\n\n<details open><summary>Click to view speculative plan</summary>\n\n\`\`\`hcl\n${plan.slice(0, 50000)}\n\`\`\`\n\n</details>`;
+            }
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existingComment = comments.find(c => c.body.includes('Speculative Plan') && c.user.type === 'Bot');
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body
+              });
+            }
