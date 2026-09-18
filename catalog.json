@@ -1,5 +1,5 @@
 {
-  "org-infra": { "visibility": "public", "template": false },
+  "org-infra": { "visibility": "private", "template": false },
   "platform": { "visibility": "private", "template": false },
   "missions": { "visibility": "public", "template": false },
   "workflows": { "visibility": "public", "template": false },
