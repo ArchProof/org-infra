@@ -1,0 +1,14 @@
+{
+  "name": "org-infra",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ArchProof organization infrastructure GitOps control",
+  "scripts": {
+    "sync-secrets": "node scripts/sync-secrets.mjs"
+  },
+  "dependencies": {
+    "libsodium": "^0.7.15",
+    "libsodium-wrappers": "^0.7.15"
+  }
+}
