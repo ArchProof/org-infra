@@ -5,5 +5,6 @@
   "workflows": { "visibility": "public", "template": false },
   "actions": { "visibility": "public", "template": false },
   "kill-the-secrets": { "visibility": "public", "template": true },
+  "maf-intro": { "visibility": "public", "template": true },
   "learner-state": { "visibility": "private", "template": false }
 }
